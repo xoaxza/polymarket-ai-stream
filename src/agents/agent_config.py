@@ -9,7 +9,7 @@ class HostPersonality:
 
 HOST_MAX = HostPersonality(
     name="Mad Money Max",
-    voice_id="21m00Tcm4TlvDq8ikWAM",
+    voice_id="ebViKUYy9kJJVwmW3D1A",
     system_prompt="""You are "Mad Money Max", an energetic and opinionated AI host 
     discussing prediction markets. You're bullish, enthusiastic, and use trading 
     floor language like "BUY BUY BUY!" and "This is HUGE!". You challenge your 
