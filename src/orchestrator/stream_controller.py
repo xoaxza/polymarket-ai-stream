@@ -8,12 +8,15 @@ from livekit.protocol.egress import (
     EncodingOptionsPreset,
 )
 from livekit.api.agent_dispatch_service import CreateAgentDispatchRequest
+from .overlay_server import start_overlay_server, stop_overlay_server
 
 class StreamController:
     def __init__(self):
         self.lkapi = api.LiveKitAPI()
         self.room_name = os.getenv("ROOM_NAME", "polymarket-ai-show")
         self.egress_id = None
+        self.overlay_server_runner = None
+        self.overlay_url = None
         
     async def create_room(self):
         """Create the LiveKit room for the show"""
@@ -131,17 +134,42 @@ class StreamController:
             urls=[f"rtmp://live.twitch.tv/app/{stream_key}"]
         )
         
-        # Use custom overlay URL for visual template
+        # Setup overlay URL for visual template
+        # NOTE: custom_base_url requires the HTML to include LiveKit recorder code
+        # If your overlay doesn't have LiveKit connection code, it will cause egress to fail
+        # For now, we'll make overlay optional to ensure stream works
         overlay_url = os.getenv("OVERLAY_URL", None)
+        use_overlay = os.getenv("USE_OVERLAY", "false").lower() == "true"
         
-        request = RoomCompositeEgressRequest(
-            room_name=self.room_name,
-            layout="speaker",  # Active speaker layout
-            stream_outputs=[stream_output],
-            preset=EncodingOptionsPreset.H264_1080P_30,
-            # Optionally use custom visual template:
-            # custom_base_url=overlay_url,
-        )
+        # Only use overlay if explicitly enabled AND URL is provided
+        if overlay_url and use_overlay:
+            print(f"📺 Overlay enabled: {overlay_url}")
+            print("⚠️  WARNING: Using custom_base_url requires LiveKit recorder code in your overlay HTML.")
+            print("   If your overlay doesn't connect to LiveKit, egress will fail.")
+            print("   Set USE_OVERLAY=false to disable and use default layout.")
+            self.overlay_url = overlay_url
+        else:
+            if overlay_url:
+                print(f"📺 Overlay URL found but disabled (set USE_OVERLAY=true to enable): {overlay_url}")
+            overlay_url = None  # Don't use overlay
+            self.overlay_url = None
+        
+        # Build egress request
+        request_kwargs = {
+            "room_name": self.room_name,
+            "layout": "speaker",  # Active speaker layout (works without overlay)
+            "stream_outputs": [stream_output],
+            "preset": EncodingOptionsPreset.H264_1080P_30,
+        }
+        
+        # Add overlay URL if enabled (must have LiveKit recorder code)
+        if overlay_url and use_overlay:
+            request_kwargs["custom_base_url"] = overlay_url
+            print(f"✅ Using custom overlay: {overlay_url}")
+        else:
+            print("✅ Using default LiveKit layout (no custom overlay)")
+        
+        request = RoomCompositeEgressRequest(**request_kwargs)
         
         try:
             info = await self.lkapi.egress.start_room_composite_egress(request)
@@ -200,6 +228,13 @@ class StreamController:
     async def cleanup(self):
         """Clean up resources"""
         await self.stop_stream()
+        
+        # Stop overlay server if running
+        if self.overlay_server_runner:
+            print("🛑 Stopping overlay server...")
+            await stop_overlay_server(self.overlay_server_runner)
+            self.overlay_server_runner = None
+        
         await self.lkapi.room.delete_room(
             api.DeleteRoomRequest(room=self.room_name)
         )

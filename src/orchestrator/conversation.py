@@ -28,17 +28,19 @@ async def generate_conversation(
     DESCRIPTION: {market_description}
     
     Rules:
-    - Max is bullish and energetic, uses "BUY BUY BUY!" style language
-    - Ben is skeptical and analytical, plays devil's advocate
-    - Each speaker should talk for 60-90 seconds (about 150-250 words)
-    - Make it entertaining and dramatic
+    - Max is bullish and energetic: ALWAYS use tags like [yells], [shouts], or [excited].
+    - Ben is skeptical and analytical: Use tags like [sighs], [deadpan], or [whispers intensely].
+    - Each speaker should talk for about 60 seconds (about 150-200 words)
+    - IMPORTANT: Every response MUST include [emotion brackets] like the examples below.
     - Reference specific odds and what they mean
     - Include trading floor energy and urgency
-    - Build on what the previous speaker said
+    - React to the energy: If Max [yells], Ben might [scoff] or [whisper] to highlight the contrast.
     - Each turn should be a complete thought or argument
     
     Format each response as: SPEAKER: dialogue
-    Example: MAX: This market is SCREAMING opportunity! 65% odds? That's basically free money! Let me break down why this is a no-brainer..."""
+    Example: Max: "[yells] BUY BUY BUY! [pounding desk] These odds are a gift from the heavens!"
+             Ben: "[sighs heavily] Max, look at the data. [whispers] You're leading people into a slaughter..."
+             """
     
     for i in range(num_exchanges):
         speaker = "max" if i % 2 == 0 else "ben"

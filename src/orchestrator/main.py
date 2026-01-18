@@ -27,8 +27,10 @@ class ShowOrchestrator:
         self.host_max: VoiceAgent = None
         self.host_ben: VoiceAgent = None
         
-        self.discussion_duration = int(os.getenv("DISCUSSION_DURATION_SECONDS", 300))
-        self.voting_duration = int(os.getenv("VOTING_DURATION_SECONDS", 60))
+        # Updated: 2-minute market cycles (1 min per voice, voting during last minute)
+        self.discussion_duration = int(os.getenv("DISCUSSION_DURATION_SECONDS", 120))  # 2 minutes
+        self.voting_duration = int(os.getenv("VOTING_DURATION_SECONDS", 60))  # 1 minute
+        self.voice_time_per_turn = 60  # 1 minute per voice
         
         self.current_market: Market = None
         self.discussed_market_ids = []
@@ -160,61 +162,100 @@ class ShowOrchestrator:
             self.pending_speech_agent = None
     
     async def run_discussion(self, market: Market):
-        """Run a 5-minute discussion about a market with pipelining"""
+        """Run a 2-minute discussion about a market (1 min per voice, voting during last minute)"""
         print(f"\n🎙️ Starting discussion: {market.question}")
         
-        # Generate conversation iterator
+        # Generate conversation with 2 exchanges (1 min each = 2 min total)
         conversation_iter = generate_conversation(
             market_question=market.question,
             market_odds=market.formatted_odds,
             market_description=market.description,
-            num_exchanges=5  # ~60-90 sec each = 5 min total
+            num_exchanges=2  # 2 exchanges: max (~60 sec) + ben (~60 sec) = 2 min total
         )
         
-        # Get first exchange
+        # Start discussion timer (2 minutes total)
+        discussion_start_time = asyncio.get_event_loop().time()
+        
+        # Get first exchange (max speaks first, ~1 minute)
         first_exchange = await conversation_iter.__anext__()
         current_speaker, current_dialogue = first_exchange
         current_agent_name = "host-max" if current_speaker == "max" else "host-ben"
         
-        # Start first agent speaking (this blocks until audio finishes)
+        # Start first agent speaking (~1 minute)
         speak_task = asyncio.create_task(self.speak(current_agent_name, current_dialogue))
         
-        # Pre-generate next response while current agent is speaking (pipelining)
+        # Pre-generate second response while first agent is speaking
         next_exchange_task = asyncio.create_task(conversation_iter.__anext__())
         
+        # Wait for first agent to finish (~1 minute mark)
+        await speak_task
+        
+        # At 1 minute mark, start voting for next market (concurrent with second voice)
+        print(f"🗳️  Starting voting for next market (1 min before new market)...")
+        voting_task = asyncio.create_task(self._run_voting_during_discussion())
+        
+        # Get second exchange and start speaking (ben speaks second, ~1 minute)
+        # Voting runs concurrently during this time
         try:
-            while True:
-                # Wait for current agent to finish speaking (await pattern)
-                await speak_task
-                
-                # Get pre-generated next response (should be ready by now)
-                try:
-                    next_speaker, next_dialogue = await next_exchange_task
-                    next_agent_name = "host-max" if next_speaker == "max" else "host-ben"
-                    
-                    # Immediately start next agent (no dead air!)
-                    speak_task = asyncio.create_task(self.speak(next_agent_name, next_dialogue))
-                    
-                    # Pre-generate the response after this one
-                    try:
-                        next_exchange_task = asyncio.create_task(conversation_iter.__anext__())
-                    except StopAsyncIteration:
-                        # Last exchange, just wait for it to finish
-                        await speak_task
-                        break
-                    
-                    # Update current for next iteration
-                    current_agent_name = next_agent_name
-                    current_dialogue = next_dialogue
-                    
-                except StopAsyncIteration:
-                    # Last exchange, just wait for it to finish
-                    await speak_task
-                    break
-                    
+            next_speaker, next_dialogue = await next_exchange_task
+            next_agent_name = "host-max" if next_speaker == "max" else "host-ben"
+            
+            # Start second agent speaking (voting happens concurrently)
+            await self.speak(next_agent_name, next_dialogue)
         except StopAsyncIteration:
-            # Conversation ended, wait for final speech
-            await speak_task
+            pass
+        
+        # Wait for voting to complete (should finish around 2 minute mark)
+        next_market = await voting_task
+        return next_market
+    
+    async def _run_voting_during_discussion(self) -> Market:
+        """Run voting during the last minute of discussion"""
+        # IMPORTANT: Exclude current market from candidates to ensure we get a NEW market
+        # Also exclude already discussed markets
+        exclude_ids = self.discussed_market_ids.copy()
+        if self.current_market and self.current_market.id not in exclude_ids:
+            exclude_ids.append(self.current_market.id)
+        
+        # Fetch candidate markets for voting (excluding current and discussed)
+        candidates = self.polymarket.get_candidate_markets(exclude_ids=exclude_ids)
+        
+        if len(candidates) < 2:
+            # If not enough candidates, clear history but still exclude current market
+            self.discussed_market_ids.clear()
+            exclude_ids = [self.current_market.id] if self.current_market else []
+            candidates = self.polymarket.get_candidate_markets(exclude_ids=exclude_ids)
+        
+        # Ensure we have 2 candidates
+        if len(candidates) < 2:
+            # Last resort: fetch more markets
+            all_markets = self.polymarket.get_trending_markets(limit=10)
+            exclude_set = set(exclude_ids)
+            candidates = [m for m in all_markets if m.id not in exclude_set][:2]
+        
+        if len(candidates) < 2:
+            print("⚠️ WARNING: Could not get 2 unique candidates, using fallback")
+            # Fallback: just get any 2 markets
+            all_markets = self.polymarket.get_trending_markets(limit=10)
+            candidates = all_markets[:2]
+        
+        print(f"   📊 Voting candidates: 1) {candidates[0].question[:50]}... | 2) {candidates[1].question[:50]}...")
+        
+        # Announce voting
+        candidate_names = [c.question[:50] for c in candidates]
+        await self.twitch_bot.open_voting(candidate_names)
+        
+        # Wait for voting duration (1 minute)
+        await asyncio.sleep(self.voting_duration)
+        
+        # Close voting and get results
+        results = await self.twitch_bot.close_voting()
+        winner_idx = results["winner"] - 1
+        
+        selected_market = candidates[winner_idx]
+        print(f"   ✅ Selected market: {selected_market.question[:50]}...")
+        
+        return selected_market
     
     async def run_voting_phase(self) -> Market:
         """Run voting phase and return winning market"""
@@ -288,14 +329,39 @@ class ShowOrchestrator:
         
         try:
             while True:
-                # Phase 1: Discussion (5 minutes)
-                await self.run_discussion(self.current_market)
-                self.discussed_market_ids.append(self.current_market.id)
+                # Phase 1: Discussion (2 minutes total: 1 min max + 1 min ben)
+                # Voting happens during last minute of discussion
+                old_market = self.current_market
                 
-                # Phase 2: Voting (1 minute)
-                self.current_market = await self.run_voting_phase()
+                # Mark old market as discussed BEFORE starting discussion
+                # This ensures it won't be selected in voting
+                if old_market and old_market.id not in self.discussed_market_ids:
+                    self.discussed_market_ids.append(old_market.id)
+                    print(f"   📝 Marked market as discussed: {old_market.question[:50]}...")
                 
-                # Brief transition
+                # Run discussion (voting happens during last minute)
+                next_market = await self.run_discussion(self.current_market)
+                
+                # Verify we got a different market
+                if next_market.id == old_market.id:
+                    print(f"⚠️ WARNING: Voting returned same market! Fetching new market directly...")
+                    # Fallback: just get a new trending market
+                    exclude_ids = self.discussed_market_ids.copy()
+                    if old_market.id not in exclude_ids:
+                        exclude_ids.append(old_market.id)
+                    new_markets = self.polymarket.get_trending_markets(limit=10)
+                    exclude_set = set(exclude_ids)
+                    available = [m for m in new_markets if m.id not in exclude_set]
+                    if available:
+                        next_market = available[0]
+                    else:
+                        # Last resort: use any market
+                        next_market = new_markets[0] if new_markets else old_market
+                
+                # Update to next market
+                self.current_market = next_market
+                
+                # Brief transition to new market
                 await self.speak(
                     "host-max",
                     f"The people have spoken! Let's dive into: {self.current_market.question}!"

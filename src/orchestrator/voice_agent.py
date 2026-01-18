@@ -58,16 +58,20 @@ class VoiceAgent:
         
         try:
             # Generate audio from ElevenLabs (streaming, PCM format)
-            # Using the streaming API
             audio_generator = elevenlabs_client.text_to_speech.stream(
                 voice_id=self.voice_id,
                 text=text,
-                model_id="eleven_flash_v2_5",
+                model_id="eleven_v3",
                 output_format="pcm_24000",  # Raw PCM, 24kHz, 16-bit, mono
             )
             
             # Buffer to accumulate audio chunks
             audio_buffer = bytearray()
+            bytes_per_frame = self.SAMPLES_PER_FRAME * 2  # 2 bytes per sample (16-bit)
+            frame_interval = self.FRAME_DURATION_MS / 1000  # 20ms in seconds
+            
+            # Use a timer-based approach for smooth frame delivery
+            last_frame_time = None
             
             # Stream audio chunks to LiveKit
             for audio_chunk in audio_generator:
@@ -76,8 +80,7 @@ class VoiceAgent:
                 
                 audio_buffer.extend(audio_chunk)
                 
-                # Process complete frames from buffer
-                bytes_per_frame = self.SAMPLES_PER_FRAME * 2  # 2 bytes per sample (16-bit)
+                # Process complete frames from buffer with proper timing
                 while len(audio_buffer) >= bytes_per_frame:
                     # Extract one frame
                     frame_bytes = bytes(audio_buffer[:bytes_per_frame])
@@ -91,16 +94,22 @@ class VoiceAgent:
                     )
                     
                     # Copy PCM data into frame using numpy (proper way to handle memoryview)
-                    # Convert bytes to int16 samples and copy into frame's memoryview
                     audio_samples = np.frombuffer(frame_bytes, dtype=np.int16)
                     frame_samples = np.frombuffer(frame.data, dtype=np.int16)
                     np.copyto(frame_samples[:len(audio_samples)], audio_samples)
                     
-                    # Feed to source
+                    # Feed to source immediately (LiveKit handles internal buffering)
                     await self.audio_source.capture_frame(frame)
                     
-                    # Small delay to match real-time playback
-                    await asyncio.sleep(self.FRAME_DURATION_MS / 1000)
+                    # Maintain frame rate timing based on actual elapsed time
+                    if last_frame_time is not None:
+                        current_time = asyncio.get_event_loop().time()
+                        elapsed = current_time - last_frame_time
+                        sleep_needed = frame_interval - elapsed
+                        if sleep_needed > 0:
+                            await asyncio.sleep(sleep_needed)
+                    
+                    last_frame_time = asyncio.get_event_loop().time()
             
             # Process remaining buffer (pad if needed)
             if len(audio_buffer) > 0:

@@ -66,8 +66,8 @@ class Config:
                 stream_key=os.getenv("TWITCH_STREAM_KEY", ""),
             ),
             stream=StreamConfig(
-                discussion_duration=int(os.getenv("DISCUSSION_DURATION_SECONDS", "300")),
-                voting_duration=int(os.getenv("VOTING_DURATION_SECONDS", "60")),
+                discussion_duration=int(os.getenv("DISCUSSION_DURATION_SECONDS", "120")),  # 2 minutes
+                voting_duration=int(os.getenv("VOTING_DURATION_SECONDS", "60")),  # 1 minute
                 room_name=os.getenv("ROOM_NAME", "polymarket-ai-show"),
             ),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),

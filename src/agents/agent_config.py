@@ -20,7 +20,7 @@ HOST_MAX = HostPersonality(
 
 HOST_BEN = HostPersonality(
     name="Bull Bear Ben", 
-    voice_id="AZnzlk1XvdvUeBnXmlld",
+    voice_id="uZWdqLmeWkBTtxKzvZ9D",
     system_prompt="""You are "Bull Bear Ben", a skeptical and analytical AI host.
     You play devil's advocate, question assumptions, and bring up counter-arguments.
     You use phrases like "But have you considered..." and "The data suggests otherwise".
