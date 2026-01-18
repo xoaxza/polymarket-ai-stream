@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket AI Show - Overlay</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Main Overlay Container -->
+    <div class="overlay">
+        
+        <!-- Top Bar - Market Info -->
+        <div class="top-bar">
+            <div class="show-title">
+                <span class="logo">📈</span>
+                <span class="title">POLYMARKET AI SHOW</span>
+                <span class="live-badge">● LIVE</span>
+            </div>
+            <div class="market-info" id="market-info">
+                <div class="market-question" id="market-question">Loading market...</div>
+                <div class="market-odds" id="market-odds"></div>
+            </div>
+        </div>
+
+        <!-- Host Labels -->
+        <div class="host-label host-max" id="host-max-label">
+            <span class="host-name">MAD MONEY MAX</span>
+            <span class="host-style">🐂 BULLISH</span>
+        </div>
+        
+        <div class="host-label host-ben" id="host-ben-label">
+            <span class="host-name">BULL BEAR BEN</span>
+            <span class="host-style">🐻 SKEPTICAL</span>
+        </div>
+
+        <!-- Voting Panel -->
+        <div class="voting-panel" id="voting-panel" style="display: none;">
+            <div class="voting-header">
+                <span class="vote-icon">🗳️</span>
+                <span class="vote-title">VOTE NOW!</span>
+                <span class="vote-timer" id="vote-timer">60</span>
+            </div>
+            <div class="voting-options">
+                <div class="vote-option option-1" id="option-1">
+                    <div class="option-number">1</div>
+                    <div class="option-name" id="option-1-name">Option 1</div>
+                    <div class="vote-bar">
+                        <div class="vote-fill" id="option-1-fill" style="width: 50%"></div>
+                    </div>
+                    <div class="vote-count" id="option-1-count">0 votes</div>
+                </div>
+                <div class="vote-option option-2" id="option-2">
+                    <div class="option-number">2</div>
+                    <div class="option-name" id="option-2-name">Option 2</div>
+                    <div class="vote-bar">
+                        <div class="vote-fill" id="option-2-fill" style="width: 50%"></div>
+                    </div>
+                    <div class="vote-count" id="option-2-count">0 votes</div>
+                </div>
+            </div>
+            <div class="voting-instructions">
+                Type <span class="highlight">1</span> or <span class="highlight">2</span> in chat to vote!
+            </div>
+        </div>
+
+        <!-- Ticker/Stats Bar -->
+        <div class="ticker-bar">
+            <div class="ticker-item">
+                <span class="ticker-label">24H VOLUME</span>
+                <span class="ticker-value" id="volume">$0</span>
+            </div>
+            <div class="ticker-item">
+                <span class="ticker-label">MARKETS DISCUSSED</span>
+                <span class="ticker-value" id="markets-count">0</span>
+            </div>
+            <div class="ticker-item">
+                <span class="ticker-label">TOTAL VOTES</span>
+                <span class="ticker-value" id="total-votes">0</span>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="overlay.js"></script>
+</body>
+</html>

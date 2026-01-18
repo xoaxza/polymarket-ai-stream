@@ -1,0 +1,21 @@
+# LiveKit
+livekit-agents>=1.0.0
+livekit-api>=0.6.0
+livekit-plugins-openai>=0.8.0
+livekit-plugins-elevenlabs>=0.8.0
+livekit-plugins-silero>=0.6.0
+
+# OpenAI
+openai>=1.0.0
+
+# Polymarket
+requests>=2.31.0
+pydantic>=2.0.0
+
+# Twitch (Python option)
+twitchio>=2.8.0
+
+# Utilities
+python-dotenv>=1.0.0
+asyncio>=3.4.3
+aiohttp>=3.9.0
