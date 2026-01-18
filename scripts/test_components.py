@@ -32,9 +32,23 @@ async def test_polymarket():
     
     print(f"✅ Fetched {len(markets)} markets")
     
+    # #region agent log
+    import json
+    log_path = r"c:\Users\Abdul\polymarketai\.cursor\debug.log"
+    market_sample = markets[0] if markets else None
+    if market_sample:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"timestamp": __import__("time").time() * 1000, "sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "test_components.py:33", "message": "Market class info", "data": {"market_class": str(type(market_sample)), "market_module": type(market_sample).__module__, "has_formatted_volume": hasattr(market_sample, "formatted_volume"), "has_formatted_odds": hasattr(market_sample, "formatted_odds"), "dir_attributes": [attr for attr in dir(market_sample) if not attr.startswith("_")]}}) + "\n")
+    # #endregion
+    
     for i, market in enumerate(markets, 1):
         print(f"\n  {i}. {market.question[:60]}...")
         print(f"     Odds: {market.formatted_odds}")
+        # #region agent log
+        if not hasattr(market, "formatted_volume"):
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"timestamp": __import__("time").time() * 1000, "sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "test_components.py:38", "message": "formatted_volume attribute missing", "data": {"market_class": str(type(market)), "available_attrs": [attr for attr in dir(market) if not attr.startswith("_") and callable(getattr(market, attr, None)) == False]}}) + "\n")
+        # #endregion
         print(f"     24h Volume: {market.formatted_volume}")
     
     return True

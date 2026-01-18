@@ -24,6 +24,15 @@ class Market(BaseModel):
             outcome: f"{price * 100:.1f}%"
             for outcome, price in zip(self.outcomes, self.outcome_prices)
         }
+    
+    @property
+    def formatted_volume(self) -> str:
+        """Return human-readable volume"""
+        if self.volume_24h >= 1_000_000:
+            return f"${self.volume_24h / 1_000_000:.1f}M"
+        elif self.volume_24h >= 1_000:
+            return f"${self.volume_24h / 1_000:.1f}K"
+        return f"${self.volume_24h:.0f}"
 
 class PolymarketClient:
     GAMMA_BASE = "https://gamma-api.polymarket.com"
