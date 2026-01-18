@@ -10,7 +10,7 @@ from .stream_controller import StreamController
 from .conversation import generate_conversation
 from .voice_agent import VoiceAgent
 from ..polymarket.client import PolymarketClient, Market
-from ..twitch.voting import VotingBot
+from ..voting.web_voting import WebVotingServer
 from ..agents.agent_config import HOST_MAX, HOST_BEN
 
 load_dotenv()
@@ -19,7 +19,7 @@ class ShowOrchestrator:
     def __init__(self):
         self.stream_controller = StreamController()
         self.polymarket = PolymarketClient()
-        self.twitch_bot = VotingBot()
+        self.voting_server = WebVotingServer(port=8080)  # Web voting server for website
         self.room: Room = None  # Realtime room connection
         self.audio_source: AudioSource = None  # Centralized audio source (for egress)
         self.audio_track: LocalAudioTrack = None  # Published audio track
@@ -165,6 +165,15 @@ class ShowOrchestrator:
         """Run a 2-minute discussion about a market (1 min per voice, voting during last minute)"""
         print(f"\n🎙️ Starting discussion: {market.question}")
         
+        # Broadcast current market to website
+        await self.voting_server.update_current_market(
+            market_id=market.id,
+            question=market.question,
+            odds=market.formatted_odds,
+            volume=market.formatted_volume
+        )
+        await self.voting_server.increment_markets_discussed()
+        
         # Generate conversation with 2 exchanges (1 min each = 2 min total)
         conversation_iter = generate_conversation(
             market_question=market.question,
@@ -241,15 +250,21 @@ class ShowOrchestrator:
         
         print(f"   📊 Voting candidates: 1) {candidates[0].question[:50]}... | 2) {candidates[1].question[:50]}...")
         
-        # Announce voting
+        # Update candidate markets on website for voting display
+        await self.voting_server.update_candidates([
+            {"id": c.id, "question": c.question, "odds": c.formatted_odds, "volume": c.formatted_volume}
+            for c in candidates
+        ])
+        
+        # Announce voting (opens voting on website)
         candidate_names = [c.question[:50] for c in candidates]
-        await self.twitch_bot.open_voting(candidate_names)
+        await self.voting_server.open_voting(candidate_names)
         
         # Wait for voting duration (1 minute)
         await asyncio.sleep(self.voting_duration)
         
         # Close voting and get results
-        results = await self.twitch_bot.close_voting()
+        results = await self.voting_server.close_voting()
         winner_idx = results["winner"] - 1
         
         selected_market = candidates[winner_idx]
@@ -271,7 +286,7 @@ class ShowOrchestrator:
         
         # Announce voting
         candidate_names = [c.question[:50] for c in candidates]
-        await self.twitch_bot.open_voting(candidate_names)
+        await self.voting_server.open_voting(candidate_names)
         
         # Have hosts announce the options
         await self.send_to_agent(
@@ -288,7 +303,7 @@ class ShowOrchestrator:
         await asyncio.sleep(self.voting_duration)
         
         # Close voting and get results
-        results = await self.twitch_bot.close_voting()
+        results = await self.voting_server.close_voting()
         winner_idx = results["winner"] - 1
         
         return candidates[winner_idx]
@@ -316,12 +331,12 @@ class ShowOrchestrator:
             import traceback
             traceback.print_exc()
         
-        # Now start egress (centralized track exists, agents may have tracks too)
-        await self.stream_controller.start_twitch_stream()
+        # No RTMP egress needed - viewers connect directly via website
+        # await self.stream_controller.start_twitch_stream()  # Removed
         
-        # Start Twitch bot
-        asyncio.create_task(self.twitch_bot.start())
-        await asyncio.sleep(3)  # Wait for bot to connect
+        # Start web voting server (website connects to this)
+        await self.voting_server.start()
+        await asyncio.sleep(1)  # Wait for server to start
         
         # Get initial market
         initial_markets = self.polymarket.get_trending_markets(limit=1)
@@ -377,6 +392,7 @@ class ShowOrchestrator:
                 except:
                     pass
             await self.stream_controller.cleanup()
+            await self.voting_server.stop()
 
 async def main():
     orchestrator = ShowOrchestrator()
