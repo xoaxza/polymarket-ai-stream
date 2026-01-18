@@ -1,6 +1,6 @@
 import asyncio
 from typing import Optional, Callable, Awaitable
-from .voting import VotingBot, VoteResult
+from .voting import VotingBot
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -58,18 +58,8 @@ class TwitchChatBot:
         candidate_2: str,
         duration_seconds: int = 60,
         on_progress: Optional[Callable[[dict], Awaitable[None]]] = None
-    ) -> VoteResult:
-        """Run a complete voting round
-        
-        Args:
-            candidate_1: Name/description of option 1
-            candidate_2: Name/description of option 2
-            duration_seconds: How long voting stays open
-            on_progress: Optional callback for progress updates
-            
-        Returns:
-            VoteResult with the outcome
-        """
+    ) -> dict:  # FIXED: Changed from VoteResult to dict
+        """Run a complete voting round"""
         # Open voting
         await self.voting_bot.open_voting([candidate_1, candidate_2])
         

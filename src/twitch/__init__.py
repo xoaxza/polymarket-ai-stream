@@ -1,4 +1,4 @@
-from .voting import VotingBot, VoteResult
+from .voting import VotingBot
 from .chat_bot import TwitchChatBot
 
-__all__ = ["VotingBot", "VoteResult", "TwitchChatBot"]
+__all__ = ["VotingBot", "TwitchChatBot"]

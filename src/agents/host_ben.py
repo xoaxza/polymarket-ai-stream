@@ -1,4 +1,5 @@
 import os
+import asyncio
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions
@@ -33,12 +34,48 @@ async def entrypoint(ctx: agents.JobContext):
             text_enabled=True,  # Receive text input from orchestrator
         ),
     )
+    
+    # Handle data messages from orchestrator (after session starts)
+    @ctx.room.on("data_received")
+    def on_data_received(packet):
+        """Handle data messages from orchestrator and make agent speak"""
+        async def handle_speech():
+            try:
+                # DataPacket has 'data' attribute (bytes), not 'payload'
+                text = packet.data.decode("utf-8") if hasattr(packet, 'data') else packet.payload.decode("utf-8")
+                print(f"[host-ben] Received message: {text[:50]}...")
+                
+                # Await speech completion - this blocks until TTS finishes
+                await session.say(text, allow_interruptions=True)
+                
+                # Send completion message back to orchestrator via data message
+                try:
+                    await ctx.room.local_participant.publish_data(
+                        b"SPEECH_COMPLETE",
+                        reliable=True,
+                        destination_identities=["orchestrator"],
+                        topic="speech_complete"
+                    )
+                    print(f"[host-ben] Speech completed, notified orchestrator")
+                except Exception as e:
+                    print(f"[host-ben] Could not send completion message: {e}")
+            except Exception as e:
+                print(f"[host-ben] Error handling data message: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Create task to handle speech asynchronously
+        asyncio.create_task(handle_speech())
 
 
 if __name__ == "__main__":
+    # Allow port to be configured via environment variable, default to 8081
+    http_port = int(os.getenv("AGENT_HTTP_PORT", "8081"))
+    
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name="host-ben",
+            port=http_port,
         )
     )

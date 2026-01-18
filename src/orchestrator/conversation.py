@@ -1,6 +1,9 @@
 import openai
+from dotenv import load_dotenv
 from typing import AsyncGenerator, Tuple
 import os
+
+load_dotenv()
 
 client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -27,13 +30,15 @@ async def generate_conversation(
     Rules:
     - Max is bullish and energetic, uses "BUY BUY BUY!" style language
     - Ben is skeptical and analytical, plays devil's advocate
-    - Each line should be 1-3 sentences
+    - Each speaker should talk for 60-90 seconds (about 150-250 words)
     - Make it entertaining and dramatic
     - Reference specific odds and what they mean
     - Include trading floor energy and urgency
+    - Build on what the previous speaker said
+    - Each turn should be a complete thought or argument
     
     Format each response as: SPEAKER: dialogue
-    Example: MAX: This market is SCREAMING opportunity! 65% odds? That's basically free money!"""
+    Example: MAX: This market is SCREAMING opportunity! 65% odds? That's basically free money! Let me break down why this is a no-brainer..."""
     
     for i in range(num_exchanges):
         speaker = "max" if i % 2 == 0 else "ben"
@@ -47,7 +52,7 @@ async def generate_conversation(
         response = await client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            max_tokens=150,
+            max_tokens=300,  # Longer responses for 60-90 second speeches
             temperature=0.9
         )
         
