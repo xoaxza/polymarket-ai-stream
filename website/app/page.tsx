@@ -26,7 +26,7 @@ interface ShowState {
 const VOTING_SERVER_URL = process.env.VOTING_SERVER_URL || "http://localhost:8080";
 const VOTING_WS_URL = VOTING_SERVER_URL.replace("http://", "ws://").replace("https://", "wss://") + "/ws";
 
-export default function StreamPage() {
+export default function BloombergTerminal() {
     // Show state
     const [state, setState] = useState<ShowState>({
         phase: "starting",
@@ -56,7 +56,25 @@ export default function StreamPage() {
     // WebSocket connection
     const wsRef = useRef<WebSocket | null>(null);
     const [isConnected, setIsConnected] = useState(false);
-    const [isConnecting, setIsConnecting] = useState(true);
+
+    // Current time
+    const [currentTime, setCurrentTime] = useState("");
+
+    // Update time every second
+    useEffect(() => {
+        const updateTime = () => {
+            const now = new Date();
+            setCurrentTime(now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            }).toUpperCase());
+        };
+        updateTime();
+        const interval = setInterval(updateTime, 1000);
+        return () => clearInterval(interval);
+    }, []);
 
     // Connect to WebSocket for state updates
     useEffect(() => {
@@ -67,7 +85,6 @@ export default function StreamPage() {
                 ws.onopen = () => {
                     console.log("Connected to voting server");
                     setIsConnected(true);
-                    setIsConnecting(false);
                 };
 
                 ws.onmessage = (event) => {
@@ -75,8 +92,6 @@ export default function StreamPage() {
                         const message = JSON.parse(event.data);
                         if (message.type === "state") {
                             setState(message.data);
-
-                            // Reset vote when new voting round starts
                             if (message.data.phase === "voting" && state.phase !== "voting") {
                                 setSelectedVote(null);
                                 setHasVoted(false);
@@ -88,189 +103,117 @@ export default function StreamPage() {
                 };
 
                 ws.onclose = () => {
-                    console.log("Disconnected from voting server");
                     setIsConnected(false);
                     setTimeout(connectWebSocket, 3000);
                 };
 
-                ws.onerror = (error) => {
-                    console.error("WebSocket error:", error);
-                    setIsConnecting(false);
-                };
-
+                ws.onerror = () => setIsConnected(false);
                 wsRef.current = ws;
             } catch (e) {
-                console.error("Failed to connect to WebSocket:", e);
-                setIsConnecting(false);
                 setTimeout(connectWebSocket, 3000);
             }
         };
 
         connectWebSocket();
-
-        return () => {
-            if (wsRef.current) {
-                wsRef.current.close();
-            }
-        };
+        return () => { if (wsRef.current) wsRef.current.close(); };
     }, []);
 
     // Connect to LiveKit room for audio
     useEffect(() => {
         const connectToLiveKit = async () => {
             try {
-                // Get token from our API
                 const tokenResponse = await fetch("/api/livekit-token");
-                if (!tokenResponse.ok) {
-                    console.error("Failed to get LiveKit token");
-                    return;
-                }
+                if (!tokenResponse.ok) return;
 
                 const { token, url } = await tokenResponse.json();
-                console.log("Got LiveKit token, connecting to:", url);
+                const room = new Room({ adaptiveStream: true, dynacast: true });
 
-                // Create room and connect
-                const room = new Room({
-                    adaptiveStream: true,
-                    dynacast: true,
-                });
-
-                // Helper to attach audio track (only host tracks, no duplicates)
                 const attachAudioTrack = (track: RemoteTrack, trackName: string) => {
-                    // Skip if already attached
-                    if (attachedTracksRef.current.has(track.sid)) {
-                        console.log("Skipping duplicate track:", track.sid, trackName);
-                        return;
-                    }
+                    if (attachedTracksRef.current.has(track.sid)) return;
+                    if (trackName === "podcast-audio") return;
 
-                    // Only attach host-max-audio and host-ben-audio, skip centralized "podcast-audio" track
-                    if (trackName === "podcast-audio") {
-                        console.log("Skipping centralized track:", trackName);
-                        return;
-                    }
-
-                    console.log("Attaching audio track:", track.sid, trackName);
                     attachedTracksRef.current.add(track.sid);
-
                     const audioElement = track.attach();
                     audioElement.volume = volume / 100;
                     audioElement.autoplay = true;
                     audioElement.style.display = "none";
-
-                    audioElement.play().catch((e) => {
-                        console.log("Autoplay blocked:", e.message);
-                    });
-
+                    audioElement.play().catch(() => { });
                     audioElementsRef.current.push(audioElement);
                     document.body.appendChild(audioElement);
                     setTrackCount(prev => prev + 1);
                 };
 
-                // Handle track subscriptions
-                room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, publication: RemoteTrackPublication) => {
-                    if (track.kind === Track.Kind.Audio) {
-                        attachAudioTrack(track, publication.trackName || "");
-                    }
+                room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub: RemoteTrackPublication) => {
+                    if (track.kind === Track.Kind.Audio) attachAudioTrack(track, pub.trackName || "");
                 });
 
                 room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
-                    console.log("Unsubscribed from track:", track.sid);
                     attachedTracksRef.current.delete(track.sid);
-                    const elements = track.detach();
-                    elements.forEach((el) => el.remove());
+                    track.detach().forEach(el => el.remove());
                     setTrackCount(prev => Math.max(0, prev - 1));
                 });
 
                 room.on(RoomEvent.Connected, () => {
-                    console.log("Connected to LiveKit room, participants:", room.remoteParticipants.size);
-
-                    // Check for existing tracks
-                    room.remoteParticipants.forEach((participant) => {
-                        participant.audioTrackPublications.forEach((pub) => {
-                            if (pub.track && pub.track.kind === Track.Kind.Audio) {
+                    room.remoteParticipants.forEach(p => {
+                        p.audioTrackPublications.forEach(pub => {
+                            if (pub.track?.kind === Track.Kind.Audio) {
                                 attachAudioTrack(pub.track as RemoteTrack, pub.trackName || "");
                             }
                         });
                     });
                 });
 
-                room.on(RoomEvent.Disconnected, () => {
-                    console.log("Disconnected from LiveKit room");
-                });
-
-                room.on(RoomEvent.ParticipantConnected, (participant) => {
-                    console.log("Participant connected:", participant.identity);
-                });
-
                 await room.connect(url, token);
                 roomRef.current = room;
-                console.log("LiveKit connection established");
-
             } catch (e) {
-                console.error("Failed to connect to LiveKit:", e);
+                console.error("LiveKit error:", e);
             }
         };
 
         connectToLiveKit();
-
         return () => {
-            // Cleanup audio elements
-            audioElementsRef.current.forEach((el) => {
-                el.pause();
-                el.remove();
-            });
+            audioElementsRef.current.forEach(el => { el.pause(); el.remove(); });
             audioElementsRef.current = [];
             attachedTracksRef.current.clear();
-
-            if (roomRef.current) {
-                roomRef.current.disconnect();
-            }
+            roomRef.current?.disconnect();
         };
     }, []);
 
-    // Enable audio on user interaction (for autoplay policy)
+    // Enable audio
     const enableAudio = useCallback(() => {
         setAudioEnabled(true);
-        audioElementsRef.current.forEach((el) => {
+        audioElementsRef.current.forEach(el => {
             el.muted = false;
             el.volume = volume / 100;
-            el.play().catch((e) => console.log("Play failed:", e.message));
+            el.play().catch(() => { });
         });
-
-        // Also try to resume audio context if needed
-        if (roomRef.current) {
-            roomRef.current.startAudio().catch(() => { });
-        }
+        roomRef.current?.startAudio().catch(() => { });
     }, [volume]);
 
-    // Update audio volume
+    // Update volume
     useEffect(() => {
-        audioElementsRef.current.forEach((el) => {
+        audioElementsRef.current.forEach(el => {
             el.volume = isMuted ? 0 : volume / 100;
         });
     }, [volume, isMuted]);
 
-    // Voting timer countdown
+    // Voting timer
     useEffect(() => {
         if (state.voting_ends_at && state.phase === "voting") {
             const updateTimer = () => {
-                const now = Date.now() / 1000;
-                const remaining = Math.max(0, Math.floor(state.voting_ends_at! - now));
+                const remaining = Math.max(0, Math.floor(state.voting_ends_at! - Date.now() / 1000));
                 setVotingTimeLeft(remaining);
             };
-
             updateTimer();
             const interval = setInterval(updateTimer, 1000);
             return () => clearInterval(interval);
-        } else {
-            setVotingTimeLeft(0);
         }
+        setVotingTimeLeft(0);
     }, [state.voting_ends_at, state.phase]);
 
     // Cast vote
     const castVote = useCallback(async (option: 1 | 2) => {
         if (hasVoted) return;
-
         setSelectedVote(option);
 
         try {
@@ -279,239 +222,315 @@ export default function StreamPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ option }),
             });
-
-            if (response.ok) {
-                setHasVoted(true);
-            }
-
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify({ type: "vote", option }));
-            }
+            if (response.ok) setHasVoted(true);
+            wsRef.current?.send(JSON.stringify({ type: "vote", option }));
         } catch (e) {
-            console.error("Failed to cast vote:", e);
+            console.error("Vote failed:", e);
         }
     }, [hasVoted]);
 
     // Calculate vote percentages
     const totalVotes = state.vote_tally[1] + state.vote_tally[2];
-    const vote1Percent = totalVotes > 0 ? (state.vote_tally[1] / totalVotes) * 100 : 50;
-    const vote2Percent = totalVotes > 0 ? (state.vote_tally[2] / totalVotes) * 100 : 50;
+    const vote1Pct = totalVotes > 0 ? (state.vote_tally[1] / totalVotes) * 100 : 50;
+    const vote2Pct = totalVotes > 0 ? (state.vote_tally[2] / totalVotes) * 100 : 50;
 
-    // Format odds nicely
-    const formatOdds = (odds: Record<string, string> | undefined) => {
-        if (!odds) return { yes: "—", no: "—" };
+    // Format odds
+    const getOdds = (odds?: Record<string, string>) => {
+        if (!odds) return { yes: "--", no: "--" };
         const entries = Object.entries(odds);
-        if (entries.length >= 2) {
-            return { yes: entries[0][1], no: entries[1][1] };
-        }
-        return { yes: entries[0]?.[1] || "—", no: "—" };
+        return {
+            yes: entries[0]?.[1] || "--",
+            no: entries[1]?.[1] || "--"
+        };
     };
+    const odds = getOdds(state.current_market?.odds);
 
-    const currentOdds = formatOdds(state.current_market?.odds);
+    // Ticker data (mock for now, would come from state)
+    const tickerItems = state.candidate_markets.length > 0
+        ? state.candidate_markets.map(m => ({
+            symbol: m.question.substring(0, 30).toUpperCase(),
+            value: Object.values(m.odds || {})[0] || "--"
+        }))
+        : [
+            { symbol: "AWAITING MARKET DATA", value: "--" },
+        ];
 
     return (
-        <div className="main-container">
-            {/* Header */}
-            <header className="header">
-                <div className="logo">
-                    <span className="logo-icon">📈</span>
-                    <span className="logo-text">POLYMARKET AI SHOW</span>
-                </div>
-                <div className="live-badge">
-                    <span className="live-dot"></span>
-                    LIVE
-                </div>
-            </header>
-
-            {/* Connection warning */}
-            {!isConnected && !isConnecting && (
-                <div className="connection-banner">
-                    <span className="connection-icon">⚠️</span>
-                    <span className="connection-text">
-                        Connecting to server... Make sure the voting server is running on port 8080.
-                    </span>
-                </div>
-            )}
-
-            {/* Main content */}
-            <div className="content-grid">
-                {/* Left side - Market info */}
-                <div className="market-section">
-                    {/* Current Market */}
-                    <div className="market-card">
-                        <div className="market-label">Currently Discussing</div>
-                        <h1 className="market-question">
-                            {state.current_market?.question || "Waiting for market..."}
-                        </h1>
-                        <div className="market-odds">
-                            <div className="odds-item">
-                                <div className="odds-label">Yes</div>
-                                <div className="odds-value yes">{currentOdds.yes}</div>
-                            </div>
-                            <div className="odds-item">
-                                <div className="odds-label">No</div>
-                                <div className="odds-value no">{currentOdds.no}</div>
-                            </div>
+        <div className="crt-container">
+            <div className="terminal">
+                {/* Top Function Bar */}
+                <div className="function-bar">
+                    <div className="function-keys">
+                        <button className="fn-key active">&lt;F1&gt; MARKET</button>
+                        <button className="fn-key">&lt;F2&gt; VOTE</button>
+                        <button className="fn-key">&lt;F3&gt; HOSTS</button>
+                        <button className="fn-key">&lt;F4&gt; AUDIO</button>
+                    </div>
+                    <div className="ticker-container">
+                        <div className="ticker">
+                            {[...tickerItems, ...tickerItems].map((item, i) => (
+                                <span key={i} className="ticker-item">
+                                    <span className="symbol">{item.symbol}:</span>{" "}
+                                    <span className="up">{item.value}</span>
+                                </span>
+                            ))}
                         </div>
                     </div>
+                </div>
 
-                    {/* Hosts */}
-                    <div className="hosts-container">
-                        <div className={`host-card max ${state.current_speaker === "max" ? "speaking" : ""}`}>
-                            <div className="host-emoji">🐂</div>
-                            <div className="host-name">MAD MONEY MAX</div>
-                            <div className="host-style">Bullish • Energetic</div>
-                        </div>
-                        <div className={`host-card ben ${state.current_speaker === "ben" ? "speaking" : ""}`}>
-                            <div className="host-emoji">🐻</div>
-                            <div className="host-name">BULL BEAR BEN</div>
-                            <div className="host-style">Skeptical • Analytical</div>
-                        </div>
-                    </div>
-
-                    {/* Audio Player */}
-                    <div className="audio-player">
-                        <div className="audio-status">
-                            <div className={`audio-indicator ${trackCount === 0 ? "disconnected" : ""}`}></div>
-                            <span className="audio-label">
-                                {trackCount > 0 ? `${trackCount} Audio Track${trackCount > 1 ? "s" : ""}` : "Connecting..."}
+                {/* Main Grid */}
+                <div className="main-grid">
+                    {/* Left Panel - Max */}
+                    <div className="panel host-panel">
+                        <div className="panel-header">HOST TERMINAL 1</div>
+                        <div className="host-label bull">
+                            MAD MONEY MAX
+                            <span className={`host-indicator ${state.current_speaker === "max" ? "host-speaking" : ""}`}>
+                                {state.current_speaker === "max" ? "LIVE" : "BULL"}
                             </span>
                         </div>
+                        <pre style={{ color: "#00AA2A", fontSize: "10px", marginBottom: "8px" }}>
+                            {`    ^__^
+    (oo)\\_______
+    (__)\\       )\\/\\
+        ||----w |
+        ||     ||`}
+                        </pre>
+                        <div className="transcript-box">
+                            <p>INITIATING BULLISH ANALYSIS PROTOCOL...</p>
+                            <p>MARKET SENTIMENT: EXTREMELY BULLISH</p>
+                            <p>RECOMMENDATION: BUY BUY BUY</p>
+                            <span className="cursor-blink"></span>
+                        </div>
+                    </div>
 
-                        {/* Enable Audio Button */}
-                        {!audioEnabled && trackCount > 0 && (
-                            <button
-                                onClick={enableAudio}
-                                style={{
-                                    background: "var(--gradient-primary)",
-                                    border: "none",
-                                    borderRadius: "8px",
-                                    padding: "10px 20px",
-                                    color: "white",
-                                    fontWeight: "700",
-                                    cursor: "pointer",
-                                    fontSize: "14px",
-                                    animation: "pulse 1.5s ease infinite",
-                                }}
-                            >
-                                🔊 Click to Enable Audio
-                            </button>
-                        )}
+                    {/* Center Panel - Market Quote */}
+                    <div className="panel quote-panel">
+                        <div className="panel-header">POLYMARKET QUOTE TERMINAL</div>
 
-                        {audioEnabled && (
-                            <div className="volume-control">
-                                <button
-                                    className="mute-button"
-                                    onClick={() => setIsMuted(!isMuted)}
-                                >
-                                    {isMuted ? "🔇" : "🔊"}
-                                </button>
-                                <input
-                                    type="range"
-                                    className="volume-slider"
-                                    min="0"
-                                    max="100"
-                                    value={volume}
-                                    onChange={(e) => setVolume(Number(e.target.value))}
-                                />
+                        <div className="market-quote">
+                            <div className="market-header">
+                                <div className="market-question glow-amber">
+                                    {state.current_market?.question || "AWAITING MARKET DATA..."}
+                                </div>
+                                <div className="market-last">
+                                    <div className="market-last-label">LAST</div>
+                                    <div className="glow">{odds.yes} / {odds.no}</div>
+                                </div>
+                            </div>
+
+                            <div className="quote-grid">
+                                <div className="quote-row">
+                                    <span className="quote-label">YES</span>
+                                    <span className="quote-yes glow">{odds.yes}</span>
+                                    <span className="quote-change up">+0.0</span>
+                                    <span className="quote-vol">VOL: {state.current_market?.volume || "--"}</span>
+                                </div>
+                                <div className="quote-row">
+                                    <span className="quote-label">NO</span>
+                                    <span className="quote-no">{odds.no}</span>
+                                    <span className="quote-change down">-0.0</span>
+                                    <span className="quote-vol">LIQ: HIGH</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Stats */}
+                        <div className="stats-grid">
+                            <div className="stat-item">
+                                <div className="stat-label">MARKETS</div>
+                                <div className="stat-value glow">{state.markets_discussed}</div>
+                            </div>
+                            <div className="stat-item">
+                                <div className="stat-label">TOTAL VOTES</div>
+                                <div className="stat-value glow">{state.total_votes}</div>
+                            </div>
+                            <div className="stat-item">
+                                <div className="stat-label">PHASE</div>
+                                <div className="stat-value" style={{ color: state.phase === "voting" ? "#FFAA00" : "#00FF41" }}>
+                                    {state.phase.toUpperCase()}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Audio Panel */}
+                        <div className="audio-panel" style={{ marginTop: "16px" }}>
+                            <div className="panel-header">AUDIO FEED</div>
+                            <div className="waveform">
+                                {[...Array(16)].map((_, i) => (
+                                    <div
+                                        key={i}
+                                        className="wave-bar"
+                                        style={{
+                                            height: `${trackCount > 0 && audioEnabled ? 8 + Math.random() * 16 : 4}px`,
+                                            animationDelay: `${i * 0.05}s`
+                                        }}
+                                    ></div>
+                                ))}
+                                <span className={`audio-status ${trackCount > 0 ? "connected" : "disconnected"}`}>
+                                    {trackCount > 0 ? `CONNECTED [${trackCount} TRACKS]` : "CONNECTING..."}
+                                </span>
+                            </div>
+                            <div className="audio-controls">
+                                {!audioEnabled && trackCount > 0 ? (
+                                    <button className="audio-btn" onClick={enableAudio}>
+                                        [ENABLE AUDIO]
+                                    </button>
+                                ) : (
+                                    <>
+                                        <button
+                                            className={`audio-btn ${!isMuted ? "enabled" : ""}`}
+                                            onClick={() => setIsMuted(!isMuted)}
+                                        >
+                                            {isMuted ? "[UNMUTE]" : "[MUTE]"}
+                                        </button>
+                                        <input
+                                            type="range"
+                                            className="volume-slider"
+                                            min="0"
+                                            max="100"
+                                            value={volume}
+                                            onChange={(e) => setVolume(Number(e.target.value))}
+                                        />
+                                        <span style={{ width: "40px" }}>{volume}%</span>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right Panel - Vote Queue + Ben */}
+                    <div className="panel vote-panel">
+                        <div className="panel-header">
+                            <span>VOTE QUEUE</span>
+                            {state.phase === "voting" && (
+                                <span className="vote-timer">{votingTimeLeft}s</span>
+                            )}
+                        </div>
+
+                        {state.phase === "voting" && state.candidate_markets.length >= 2 ? (
+                            <>
+                                <div className="vote-prompt">*** VOTE NOW ***</div>
+                                <div className="vote-queue">
+                                    <div
+                                        className={`vote-option ${selectedVote === 1 ? "selected" : ""}`}
+                                        onClick={() => castVote(1)}
+                                    >
+                                        <div className="vote-option-header">
+                                            <span className="vote-number">1&gt;</span>
+                                            <span className="vote-question">
+                                                {state.candidate_markets[0]?.question}
+                                            </span>
+                                        </div>
+                                        <div className="vote-stats">
+                                            <span>VOTES: {state.vote_tally[1]}</span>
+                                            <span>({vote1Pct.toFixed(0)}%)</span>
+                                        </div>
+                                        <div className="vote-bar">
+                                            <div className="vote-bar-fill" style={{ width: `${vote1Pct}%` }}></div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        className={`vote-option ${selectedVote === 2 ? "selected" : ""}`}
+                                        onClick={() => castVote(2)}
+                                    >
+                                        <div className="vote-option-header">
+                                            <span className="vote-number">2&gt;</span>
+                                            <span className="vote-question">
+                                                {state.candidate_markets[1]?.question}
+                                            </span>
+                                        </div>
+                                        <div className="vote-stats">
+                                            <span>VOTES: {state.vote_tally[2]}</span>
+                                            <span>({vote2Pct.toFixed(0)}%)</span>
+                                        </div>
+                                        <div className="vote-bar">
+                                            <div className="vote-bar-fill" style={{ width: `${vote2Pct}%` }}></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {hasVoted && (
+                                    <div className="vote-confirmed">
+                                        VOTE REGISTERED FOR OPTION {selectedVote}
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <div className="waiting-panel">
+                                <div className="waiting-text">
+                                    {state.phase === "starting" ? "INITIALIZING..." :
+                                        state.phase === "transition" ? "LOADING MARKET..." :
+                                            "DISCUSSION IN PROGRESS"}
+                                </div>
+                                <div className="waiting-subtext">
+                                    VOTE QUEUE OPENS T-60 SEC BEFORE MARKET CHANGE
+                                </div>
                             </div>
                         )}
+
+                        {/* Ben Panel */}
+                        <div style={{ marginTop: "16px" }}>
+                            <div className="host-label bear">
+                                BULL BEAR BEN
+                                <span className={`host-indicator ${state.current_speaker === "ben" ? "host-speaking" : ""}`}>
+                                    {state.current_speaker === "ben" ? "LIVE" : "BEAR"}
+                                </span>
+                            </div>
+                            <pre style={{ color: "#CC2222", fontSize: "10px", marginBottom: "8px" }}>
+                                {`  _,-""-,_
+ /\`      \`\\
+|  (o)(o)  |
+|    __    |
+ \\  \\__/  /
+  \`-,__,-\``}
+                            </pre>
+                            <div className="transcript-box" style={{ maxHeight: "150px" }}>
+                                <p>INITIATING BEARISH COUNTER-ANALYSIS...</p>
+                                <p>WARNING: EXTREME SKEPTICISM DETECTED</p>
+                                <p>RECOMMENDATION: EXERCISE CAUTION</p>
+                                <span className="cursor-blink"></span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                {/* Right side - Voting */}
-                <div className="voting-sidebar">
-                    {state.phase === "voting" && state.candidate_markets.length >= 2 ? (
-                        <div className="voting-card">
-                            <div className="voting-header">
-                                <div className="voting-title">
-                                    <span className="voting-icon">🗳️</span>
-                                    <span className="voting-text">VOTE NOW!</span>
-                                </div>
-                                <div className={`voting-timer ${votingTimeLeft <= 10 ? "urgent" : ""}`}>
-                                    {votingTimeLeft}s
-                                </div>
-                            </div>
-
-                            <div className="vote-options">
-                                <button
-                                    className={`vote-button ${selectedVote === 1 ? "selected" : ""}`}
-                                    onClick={() => castVote(1)}
-                                    disabled={hasVoted && selectedVote !== 1}
-                                >
-                                    <div className="vote-button-header">
-                                        <div className="vote-number">1</div>
-                                        <div className="vote-question">
-                                            {state.candidate_markets[0]?.question || "Option 1"}
-                                        </div>
-                                    </div>
-                                    <div className="vote-progress">
-                                        <div className="vote-progress-fill" style={{ width: `${vote1Percent}%` }}></div>
-                                    </div>
-                                    <div className="vote-count">
-                                        {state.vote_tally[1]} votes ({vote1Percent.toFixed(0)}%)
-                                    </div>
-                                </button>
-
-                                <button
-                                    className={`vote-button ${selectedVote === 2 ? "selected" : ""}`}
-                                    onClick={() => castVote(2)}
-                                    disabled={hasVoted && selectedVote !== 2}
-                                >
-                                    <div className="vote-button-header">
-                                        <div className="vote-number">2</div>
-                                        <div className="vote-question">
-                                            {state.candidate_markets[1]?.question || "Option 2"}
-                                        </div>
-                                    </div>
-                                    <div className="vote-progress">
-                                        <div className="vote-progress-fill" style={{ width: `${vote2Percent}%` }}></div>
-                                    </div>
-                                    <div className="vote-count">
-                                        {state.vote_tally[2]} votes ({vote2Percent.toFixed(0)}%)
-                                    </div>
-                                </button>
-                            </div>
-
-                            {hasVoted && (
-                                <div style={{ textAlign: "center", color: "var(--color-success)", fontSize: "14px" }}>
-                                    ✓ Your vote has been recorded!
-                                </div>
-                            )}
+                {/* Bottom Status Bar */}
+                <div className="status-bar">
+                    <div className="status-section">
+                        <div className="status-item">
+                            <span className="status-label">PHASE:</span>
+                            <span className={`status-value ${state.phase === "voting" ? "voting" : ""}`}>
+                                {state.phase.toUpperCase()}
+                            </span>
                         </div>
-                    ) : (
-                        <div className="waiting-card">
-                            <div className="waiting-icon">⏳</div>
-                            <div className="waiting-title">
-                                {state.phase === "starting"
-                                    ? "Show Starting..."
-                                    : state.phase === "transition"
-                                        ? "Loading Next Market..."
-                                        : "Discussion in Progress"}
-                            </div>
-                            <div className="waiting-subtitle">
-                                Voting opens 1 minute before market change
-                            </div>
+                        <div className="status-item">
+                            <span className="status-label">MARKETS:</span>
+                            <span className="status-value">{state.markets_discussed}</span>
                         </div>
-                    )}
-
-                    {/* Stats */}
-                    <div className="stats-card">
-                        <div className="stats-grid">
-                            <div className="stat-item">
-                                <div className="stat-label">Markets</div>
-                                <div className="stat-value">{state.markets_discussed}</div>
-                            </div>
-                            <div className="stat-item">
-                                <div className="stat-label">Total Votes</div>
-                                <div className="stat-value">{state.total_votes}</div>
-                            </div>
-                            <div className="stat-item">
-                                <div className="stat-label">Phase</div>
-                                <div className="stat-value" style={{ fontSize: "14px", textTransform: "capitalize" }}>
-                                    {state.phase}
-                                </div>
-                            </div>
+                        <div className="status-item">
+                            <span className="status-label">VOTES:</span>
+                            <span className="status-value">{state.total_votes}</span>
+                        </div>
+                        <div className="status-item">
+                            <span className="status-label">AUDIO:</span>
+                            <span className="status-value" style={{ color: trackCount > 0 ? "#00FF41" : "#FF3333" }}>
+                                {trackCount > 0 ? "CONNECTED" : "OFFLINE"}
+                            </span>
+                        </div>
+                    </div>
+                    <div className="status-section">
+                        <div className="status-item">
+                            <span className="status-label">WS:</span>
+                            <span className="status-value" style={{ color: isConnected ? "#00FF41" : "#FF3333" }}>
+                                {isConnected ? "ONLINE" : "OFFLINE"}
+                            </span>
+                        </div>
+                        <div className="status-item">
+                            <span className="status-label">TIME:</span>
+                            <span className="status-value">{currentTime}</span>
+                            <span className="status-cursor"></span>
                         </div>
                     </div>
                 </div>
